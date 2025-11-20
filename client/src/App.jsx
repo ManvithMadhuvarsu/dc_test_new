@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
+import ReactMarkdown from 'react-markdown';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 
@@ -553,7 +554,7 @@ function ExamBoard({
           <article key={question.id} className="question-card">
             <header>
               <span className="q-number">Q{question.sequence}</span>
-              <p>{question.prompt}</p>
+              <ReactMarkdown className="question-prompt">{question.prompt}</ReactMarkdown>
             </header>
             <div className="options">
               {['A', 'B', 'C', 'D'].map((optionKey) => (
