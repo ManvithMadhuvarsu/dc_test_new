@@ -3,7 +3,6 @@ import './App.css';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 
 const blockedKeys = ['F12', 'PrintScreen'];
@@ -554,9 +553,9 @@ function ExamBoard({
       <div className="question-list">
         {questions.map((question) => (
           <article key={question.id} className="question-card">
-            <header className="question-header">
-              <div className="q-number">Q{question.sequence}</div>
-              <ReactMarkdown className="question-prompt"
+            <header>
+              <span className="q-number">Q{question.sequence}</span>
+              <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw]}
                 skipHtml={false}

@@ -1,37 +1,44 @@
 import express from "express";
+import path from "path";
 import app from "./app.js";
 import { config } from "./config/env.js";
-import path from "path";
+import { getActiveSessionCount } from "./utils/auditLogger.js";
 
 const __dirname = path.resolve();
 
-// Serve static assets from client/dist
+// ---------------------------------------
+// Serve React Vite Production Build
+// ---------------------------------------
 app.use(express.static(path.join(__dirname, "../client/dist")));
 
-// Catch-all route FOR REACT APP (Important Fix for Express 5)
+// Express v5 requires regex instead of "*" or "/*"
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, "../client/dist/index.html"));
 });
 
-// =========================================
-
+// ---------------------------------------
+// Start server
+// ---------------------------------------
 const port = config.port;
 const host = "0.0.0.0";
 
-app
-  .listen(port, host, () => {
-    console.log(`Secure exam server listening on port ${port}`);
-    console.log(`Accessible at: http://localhost:${port}`);
-    console.log("=== Audit Logging Active ===");
-    console.log("Monitoring student sessions in real-time...\n");
-  })
-  .on("error", (error) => {
-    if (error.code === "EADDRINUSE") {
-      console.error(`❌ ERROR: Port ${port} is already in use!`);
-      console.error(`Stop the process using port ${port} or change PORT in .env`);
-    } else {
-      console.error("❌ ERROR: Server failed:", error.message);
-      console.error("Stack:", error.stack);
-    }
-    process.exit(1);
-  });
+const server = app.listen(port, host, () => {
+  console.log(`Secure exam server listening on port ${port}`);
+  console.log(`Accessible locally at: http://localhost:${port}`);
+  console.log("=== Audit Logging Active ===");
+  console.log("Monitoring student sessions in real-time...\n");
+});
+
+// ---------------------------------------
+// Error Handling
+// ---------------------------------------
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`\n❌ ERROR: Port ${port} is already in use!`);
+    console.error(`Stop the process using port ${port} or update PORT in .env\n`);
+  } else {
+    console.error("\n❌ ERROR: Failed to start server:", error.message);
+    console.error("Stack:", error.stack, "\n");
+  }
+  process.exit(1);
+});
