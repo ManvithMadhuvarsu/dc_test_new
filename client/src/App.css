@@ -369,22 +369,23 @@ button.primary:hover:not(:disabled) {
 
 .question-card header {
   display: flex;
-  gap: 1rem;
-  align-items: center;
-  margin-bottom: 1rem;
+  flex-direction: column;   /* NEW: forces Q-number on top, markdown below */
+  align-items: flex-start;  /* Align left */
+  gap: 0.4rem;              /* Small spacing between Q-number and question text */
 }
 
 .q-number {
+  display: flex;            /* Fixes the circle alignment */
+  align-items: center;
+  justify-content: center;
   background: #f0f6ff;
   color: #1552cc;
   border-radius: 50%;
   width: 38px;
   height: 38px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   font-weight: 600;
 }
+
 
 .options {
   display: grid;

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 
@@ -552,9 +554,15 @@ function ExamBoard({
       <div className="question-list">
         {questions.map((question) => (
           <article key={question.id} className="question-card">
-            <header>
-              <span className="q-number">Q{question.sequence}</span>
-              <ReactMarkdown className="question-prompt">{question.prompt}</ReactMarkdown>
+            <header className="question-header">
+              <div className="q-number">Q{question.sequence}</div>
+              <ReactMarkdown className="question-prompt"
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeRaw]}
+                skipHtml={false}
+              >
+                {question.prompt.replace(/\r\n/g, '\n')}
+              </ReactMarkdown>
             </header>
             <div className="options">
               {['A', 'B', 'C', 'D'].map((optionKey) => (
