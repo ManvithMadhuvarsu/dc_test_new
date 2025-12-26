@@ -6,14 +6,12 @@ import { getActiveSessionCount } from "./utils/auditLogger.js";
 
 const __dirname = path.resolve();
 
-// ---------------------------------------
-// Serve React Vite Production Build
-// ---------------------------------------
-app.use(express.static(path.join(__dirname, "../client/dist")));
-
-// Express v5 requires regex instead of "*" or "/*"
-app.get(/.*/, (req, res) => {
-  res.sendFile(path.join(__dirname, "../client/dist/index.html"));
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "DC Test Backend",
+    environment: process.env.NODE_ENV
+  });
 });
 
 // ---------------------------------------
