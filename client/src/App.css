@@ -10,21 +10,24 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: linear-gradient(145deg, #f7fbff 0%, #dfeeff 100%);
   user-select: none;
 }
 
 .app-shell {
-  padding: 2rem;
-  min-height: 100vh;
+  padding: 1rem;
+  height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .surface {
   width: min(1100px, 100%);
+  max-height: calc(100vh - 2rem);
   background: rgba(255, 255, 255, 0.9);
   border-radius: 28px;
   box-shadow: 0 25px 60px rgba(38, 94, 181, 0.15);
@@ -32,6 +35,25 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Exam board specific - wider container */
+.surface.exam-board-container {
+  width: min(1400px, 95vw);
+  max-width: 95vw;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  border-radius: 20px;
+  background: white;
+  box-shadow: 0 25px 60px rgba(38, 94, 181, 0.15);
+  height: calc(100vh - 120px);
+  max-height: calc(100vh - 120px);
+  margin-top: 100px;
 }
 
 .brand-header {
@@ -191,7 +213,7 @@ button.primary:hover:not(:disabled) {
 }
 
 .instructions-card {
-  max-height: 85vh;
+  max-height: calc(100vh - 200px);
   overflow-y: auto;
   padding-right: 0.5rem;
 }
@@ -308,18 +330,182 @@ button.primary:hover:not(:disabled) {
 
 .exam-board {
   display: flex;
+  flex-direction: row;
+  gap: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Left Sidebar */
+.exam-sidebar {
+  width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+  background: #f5faff;
+  border-right: 2px solid #dfe8f5;
+  display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+}
+
+.sidebar-header {
+  padding: 1.5rem;
+  border-bottom: 2px solid #dfe8f5;
+  background: white;
+}
+
+.sidebar-header h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.1rem;
+  color: #0b1f33;
+  font-weight: 600;
+}
+
+.sidebar-student-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sidebar-student-info .info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.sidebar-student-info .info-label {
+  font-size: 0.75rem;
+  color: #60718a;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sidebar-student-info .info-value {
+  font-size: 0.95rem;
+  color: #0b1f33;
+  font-weight: 600;
+}
+
+.sidebar-timer {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, #4b84ff, #6cd5ff);
+  border-radius: 12px;
+  color: white;
+  text-align: center;
+}
+
+.sidebar-timer .timer-label {
+  font-size: 0.8rem;
+  opacity: 0.95;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.sidebar-timer .timer-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-questions {
+  padding: 1.5rem;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sidebar-questions h4 {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  color: #0b1f33;
+  font-weight: 600;
+}
+
+.question-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.5rem;
+}
+
+.question-number-btn {
+  aspect-ratio: 1;
+  border: 2px solid #dbe5f7;
+  border-radius: 8px;
+  background: #f8f9fa;
+  color: #6c757d;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 150ms;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.question-number-btn:hover {
+  border-color: #4b84ff;
+  transform: scale(1.05);
+  background: #e8f0fe;
+}
+
+.question-number-btn.viewed {
+  background: #e8f0fe;
+  border-color: #c7dafc;
+  color: #1552cc;
+}
+
+.question-number-btn.attempted {
+  background: #d4edda;
+  border-color: #c3e6cb;
+  color: #155724;
+}
+
+.question-number-btn.current {
+  background: #4b84ff;
+  border-color: #4b84ff;
+  color: white;
+  box-shadow: 0 4px 12px rgba(75, 132, 255, 0.4);
+}
+
+/* Main Content Area */
+.exam-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
+  min-width: 0;
+}
+
+.exam-content-header {
+  padding: 1rem 1.5rem;
+  background: #edf4ff;
+  border-bottom: 2px solid #dfe8f5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.exam-content-header p {
+  margin: 0;
+  color: #2b3a55;
+  font-size: 0.95rem;
+}
+
+.exam-content-header .answered-count {
+  color: #1552cc;
+  font-weight: 600;
 }
 
 .exam-meta {
-  display: flex;
-  justify-content: space-between;
-  background: #edf4ff;
-  padding: 1rem 1.25rem;
-  border-radius: 16px;
-  color: #2b3a55;
-  gap: 1rem;
+  display: none; /* Hide old meta, using sidebar instead */
 }
 
 .timer-chip {
@@ -349,9 +535,11 @@ button.primary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  max-height: 60vh;
+  flex: 1;
   overflow-y: auto;
-  padding-right: 0.5rem;
+  overflow-x: hidden;
+  padding: 1.5rem;
+  min-height: 0;
 }
 
 .question-card {
@@ -386,6 +574,166 @@ button.primary:hover:not(:disabled) {
   font-weight: 600;
 }
 
+.question-prompt {
+  width: 100%;
+  line-height: 1.6;
+}
+
+.question-prompt .markdown-paragraph {
+  margin: 0.75rem 0;
+  line-height: 1.7;
+  color: #0b1f33;
+}
+
+.question-prompt .markdown-paragraph:first-child {
+  margin-top: 0;
+}
+
+.question-prompt .markdown-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+/* Code block styling */
+.question-prompt .code-block {
+  background: #f5f7fa;
+  border: 1px solid #dbe5f7;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.question-prompt .code-block code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  color: #0b1f33;
+  font-size: inherit;
+}
+
+/* Inline code styling */
+.question-prompt .inline-code {
+  background: #f0f6ff;
+  color: #1552cc;
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9em;
+  border: 1px solid #c7dafc;
+}
+
+/* List styling */
+.question-prompt ul,
+.question-prompt ol {
+  margin: 0.75rem 0;
+  padding-left: 1.5rem;
+  line-height: 1.7;
+}
+
+.question-prompt li {
+  margin: 0.5rem 0;
+  color: #0b1f33;
+}
+
+/* Strong and emphasis */
+.question-prompt strong {
+  font-weight: 600;
+  color: #0b1f33;
+}
+
+.question-prompt em {
+  font-style: italic;
+}
+
+/* Question Group Styling */
+.question-group {
+  margin-bottom: 1.5rem;
+  border: 2px solid #e8f0fe;
+  border-radius: 16px;
+  padding: 1.25rem;
+  background: #fafbff;
+}
+
+.question-group-header {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 2px solid #dbe5f7;
+}
+
+.question-group-header .group-image {
+  margin-bottom: 1rem;
+}
+
+.question-group-header .group-instruction {
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: #0b1f33;
+  text-align: left;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: #f0f6ff;
+  border-radius: 12px;
+  border: 1px solid #c7dafc;
+  display: block;
+  width: 100%;
+}
+
+/* Ensure pre tags in group instructions are left-aligned */
+.question-group-header .group-instruction pre {
+  text-align: left !important;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: #f5f7fa;
+  border: 1px solid #dbe5f7;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  white-space: pre;
+  display: block;
+}
+
+.question-group-header .group-instruction p {
+  text-align: left;
+  margin: 0.75rem 0;
+}
+
+.question-group-header .group-instruction p:first-child {
+  margin-top: 0;
+}
+
+.question-group-header .group-instruction p:last-child {
+  margin-bottom: 0;
+}
+
+.question-group .question-card {
+  margin-top: 1rem;
+  background: white;
+}
+
+.question-image-container {
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.question-image {
+  max-width: 100%;
+  max-height: 400px;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid #dbe5f7;
+  box-shadow: 0 4px 12px rgba(12, 56, 112, 0.08);
+  object-fit: contain;
+  background: #fdfdff;
+}
 
 .options {
   display: grid;

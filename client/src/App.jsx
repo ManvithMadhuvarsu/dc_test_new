@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import './App.css';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -19,6 +19,12 @@ function App() {
   const [violationReason, setViolationReason] = useState('');
   const [timeLeftMs, setTimeLeftMs] = useState(null);
   const [instructionsTimer, setInstructionsTimer] = useState(120); // 2 minutes in seconds
+
+  // Count only actual questions (exclude headers) for display
+  const actualQuestionCount = useMemo(() => 
+    questions.filter(q => !q.is_group_header).length, 
+    [questions]
+  );
 
   const answeredCount = useMemo(() => Object.keys(answers).length, [answers]);
 
@@ -116,23 +122,38 @@ function App() {
       return undefined;
     }
 
-    const evaluate = () => {
+    let hasAutoSubmitted = false;
+
+    const evaluate = async () => {
       const diff = new Date(session.expiresAt).getTime() - Date.now();
       if (diff <= 0) {
         setTimeLeftMs(0);
+
+        // Auto-submit current answers when time elapses
+        if (!hasAutoSubmitted) {
+          hasAutoSubmitted = true;
+          try {
+            await submitExam();
+          } catch (error) {
+            // If auto-submit fails, lock the session to prevent further actions
+            console.error('Auto-submit on time elapsed failed:', error);
         reportViolation('Exam time elapsed');
+          }
+        }
         return null;
       }
       setTimeLeftMs(diff);
       return diff;
     };
 
+    // Initial evaluation
     evaluate();
     const interval = setInterval(() => {
-      const diff = evaluate();
-      if (diff === null) {
+      evaluate().then((result) => {
+        if (result === null) {
         clearInterval(interval);
       }
+      });
     }, 1000);
 
     return () => clearInterval(interval);
@@ -241,18 +262,39 @@ function App() {
     setPhase('IN_PROGRESS');
   };
 
-  const updateAnswer = (questionId, option) => {
-    setAnswers((prev) => ({
+  const updateAnswer = (questionId, option, allowsMultiple) => {
+    setAnswers((prev) => {
+      if (allowsMultiple) {
+        // Multi-select: toggle option in array
+        const current = prev[questionId];
+        const currentArray = Array.isArray(current) ? current : (current ? [current] : []);
+        const newArray = currentArray.includes(option)
+          ? currentArray.filter(opt => opt !== option) // Remove if already selected
+          : [...currentArray, option].sort(); // Add and sort
+        return {
+          ...prev,
+          [questionId]: newArray.length > 0 ? newArray : null,
+        };
+      } else {
+        // Single-select: replace with single option
+        return {
       ...prev,
       [questionId]: option,
-    }));
+        };
+      }
+    });
   };
 
   const submitExam = async () => {
     setLoading(true);
     setFeedback('');
     try {
-      const formattedAnswers = Object.entries(answers).map(([questionId, selectedOption]) => ({
+      // Filter out header questions - they shouldn't have answers
+      const questionIdSet = new Set(questions.filter(q => !q.is_group_header).map(q => q.id));
+      
+      const formattedAnswers = Object.entries(answers)
+        .filter(([questionId]) => questionIdSet.has(Number(questionId)))
+        .map(([questionId, selectedOption]) => ({
         questionId: Number(questionId),
         selectedOption,
       }));
@@ -299,11 +341,22 @@ function App() {
     setViolationReason('');
     setTimeLeftMs(null);
     setInstructionsTimer(120);
+    setFeedback(''); // Clear any error messages when resetting
   };
+
+  // Clear feedback when phase changes (so errors don't persist across pages)
+  useEffect(() => {
+    // Clear feedback when leaving IN_PROGRESS phase or when on non-error phases
+    if (phase === 'LOGIN' || phase === 'SUBMITTED' || phase === 'LOCKED' || phase === 'INSTRUCTIONS') {
+      setFeedback('');
+    }
+  }, [phase]);
 
   return (
     <div className="app-shell">
-      <main className="surface">
+      <main className={`surface ${phase === 'IN_PROGRESS' ? 'exam-board-container' : ''}`}>
+        {phase !== 'IN_PROGRESS' && (
+          <>
         <header className="brand-header">
           <h1>{BRAND_TITLE}</h1>
           <p>Live monitoring • Zero tolerance for malpractice</p>
@@ -327,9 +380,12 @@ function App() {
               </strong>
             </div>
           </div>
+            )}
+          </>
         )}
 
-        {feedback && (
+        {/* Only show feedback on specific phases where it's relevant */}
+        {feedback && (phase === 'LOGIN' || phase === 'IN_PROGRESS') && (
           <div className="alert alert-centered">
             <p className="alert-message">{feedback}</p>
           </div>
@@ -342,7 +398,7 @@ function App() {
         {phase === 'INSTRUCTIONS' && (
           <InstructionsPage
             session={session}
-            questionCount={questions.length}
+            questionCount={actualQuestionCount}
             durationMinutes={session?.durationMinutes}
             timerSeconds={instructionsTimer}
             onBegin={beginExam}
@@ -358,6 +414,8 @@ function App() {
             answeredCount={answeredCount}
             loading={loading}
             timeLeftMs={timeLeftMs}
+            totalQuestions={actualQuestionCount}
+            session={session}
           />
         )}
 
@@ -537,52 +595,378 @@ function ExamBoard({
   answeredCount,
   loading,
   timeLeftMs,
+  totalQuestions,
+  session,
 }) {
+  const [currentQuestionId, setCurrentQuestionId] = useState(null);
+  const [viewedQuestions, setViewedQuestions] = useState(new Set());
+
+  // Track viewed questions when scrolling
+  useEffect(() => {
+    const handleScroll = () => {
+      const questionCards = document.querySelectorAll('.question-card');
+      questionCards.forEach((card) => {
+        const rect = card.getBoundingClientRect();
+        if (rect.top >= 0 && rect.top < window.innerHeight / 2) {
+          const questionId = card.getAttribute('data-question-id');
+          if (questionId) {
+            setViewedQuestions(prev => new Set([...prev, questionId]));
+          }
+        }
+      });
+    };
+
+    const container = document.querySelector('.question-list');
+    if (container) {
+      container.addEventListener('scroll', handleScroll);
+      handleScroll(); // Initial check
+      return () => container.removeEventListener('scroll', handleScroll);
+    }
+  }, [questions]);
+
+  // Scroll to question when clicking number
+  const scrollToQuestion = (questionId) => {
+    const element = document.querySelector(`[data-question-id="${questionId}"]`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setCurrentQuestionId(questionId);
+      setViewedQuestions(prev => new Set([...prev, String(questionId)]));
+    }
+  };
+  
+  // Group questions by question_group_id while maintaining sequence order
+  // Questions come from backend already sorted by sequence, so we preserve that order
+  // Then assign sequential display numbers (Q1, Q2, Q3...) based on final display order
+  const groupedQuestions = useMemo(() => {
+    const groups = new Map();
+    const ungrouped = [];
+    const groupOrderMap = new Map(); // Track order of groups as they appear
+
+    // Process questions in the order they come from backend (preserves zigzag for individuals)
+    questions.forEach((q, index) => {
+      if (q.question_group_id && q.question_group_id !== null) {
+        if (!groups.has(q.question_group_id)) {
+          groups.set(q.question_group_id, []);
+          // Track the first appearance of this group to maintain order
+          groupOrderMap.set(q.question_group_id, groupOrderMap.size);
+        }
+        groups.get(q.question_group_id).push(q);
+      } else {
+        ungrouped.push(q);
+      }
+    });
+
+    // Sort groups by their first appearance order, then sort questions within group
+    // Group questions maintain their order (header first, then by group_order/sequence)
+    const sortedGroups = Array.from(groups.entries())
+      .sort(([groupIdA], [groupIdB]) => groupOrderMap.get(groupIdA) - groupOrderMap.get(groupIdB))
+      .map(([groupId, groupQs]) => {
+        // Sort questions within group: header first, then by group_order or sequence
+        const sorted = groupQs.sort((a, b) => {
+          if (a.is_group_header) return -1;
+          if (b.is_group_header) return 1;
+          // Use group_order if available, otherwise sequence
+          const orderA = a.group_order !== null && a.group_order !== undefined ? a.group_order : a.sequence;
+          const orderB = b.group_order !== null && b.group_order !== undefined ? b.group_order : b.sequence;
+          if (orderA === null || orderA === undefined) return 1;
+          if (orderB === null || orderB === undefined) return -1;
+          return orderA - orderB;
+        });
+        const header = sorted.find(q => q.is_group_header);
+        const rest = sorted.filter(q => !q.is_group_header);
+        return { groupId, header, questions: rest };
+      });
+
+    // Ungrouped questions maintain their zigzag order (don't sort by sequence)
+    // They come from backend in shuffled order, we just preserve that
+    
+    // Now assign sequential display numbers (Q1, Q2, Q3...) based on final display order
+    // This ensures question numbers are always sequential regardless of zigzag/group order
+    let displaySequence = 1;
+    
+    // Assign numbers to group questions first
+    const groupsWithNumbers = sortedGroups.map(({ groupId, header, questions: groupQs }) => {
+      const questionsWithNumbers = groupQs.map(q => ({
+        ...q,
+        displaySequence: displaySequence++ // Sequential numbers based on display order
+      }));
+      return { groupId, header, questions: questionsWithNumbers };
+    });
+    
+    // Then assign numbers to ungrouped questions
+    const ungroupedWithNumbers = ungrouped.map(q => ({
+      ...q,
+      displaySequence: displaySequence++ // Sequential numbers based on display order
+    }));
+    
+    return { groups: groupsWithNumbers, ungrouped: ungroupedWithNumbers };
+  }, [questions]);
+
+  // Get all actual questions with displaySequence for sidebar grid
+  const questionsForGrid = useMemo(() => {
+    const allQuestions = [];
+    groupedQuestions.groups.forEach(({ questions: groupQs }) => {
+      allQuestions.push(...groupQs);
+    });
+    allQuestions.push(...groupedQuestions.ungrouped);
+    // Sort by displaySequence to ensure sequential order
+    return allQuestions.sort((a, b) => (a.displaySequence || 0) - (b.displaySequence || 0));
+  }, [groupedQuestions]);
+
   return (
     <section className="exam-board">
-      <div className="exam-meta">
-        <div>
-          <p>Answer carefully. Monitoring is active.</p>
-          <span>{answeredCount} / {questions.length} answered</span>
+      {/* Left Sidebar */}
+      <div className="exam-sidebar">
+        <div className="sidebar-header">
+          <h3>Exam Details</h3>
+          {session && (
+            <div className="sidebar-student-info">
+              <div className="info-row">
+                <span className="info-label">Candidate</span>
+                <span className="info-value">{session.studentName || 'N/A'}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-label">College ID</span>
+                <span className="info-value">{session.studentId || 'N/A'}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-label">Program</span>
+                <span className="info-value">
+                  {session.course || 'N/A'}
+                  {session.degree ? ` • ${session.degree}` : ''}
+                </span>
+              </div>
+            </div>
+          )}
+          <div className="sidebar-timer">
+            <div className="timer-label">Time Left</div>
+            <div className="timer-value">{formatClock(timeLeftMs)}</div>
+          </div>
         </div>
-        <div className="timer-chip">
-          <span>Time left</span>
-          <strong>{formatClock(timeLeftMs)}</strong>
+        <div className="sidebar-questions">
+          <h4>Questions</h4>
+          <div className="question-grid">
+            {questionsForGrid.map((q) => {
+              const questionId = String(q.id);
+              const isAttempted = answers[questionId] !== undefined && answers[questionId] !== null;
+              const isViewed = viewedQuestions.has(questionId);
+              const isCurrent = currentQuestionId === questionId;
+              const displayNum = q.displaySequence || q.sequence || q.id;
+              
+              return (
+                <button
+                  key={q.id}
+                  className={`question-number-btn ${
+                    isCurrent ? 'current' : 
+                    isAttempted ? 'attempted' : 
+                    isViewed ? 'viewed' : ''
+                  }`}
+                  onClick={() => scrollToQuestion(q.id)}
+                  title={`Question ${displayNum}`}
+                >
+                  {displayNum}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
+
+      {/* Main Content */}
+      <div className="exam-content">
+        <div className="exam-content-header">
+          <p>Answer carefully. Monitoring is active.</p>
+          <span className="answered-count">{answeredCount} / {totalQuestions} answered</span>
+      </div>
       <div className="question-list">
-        {questions.map((question) => (
-          <article key={question.id} className="question-card">
+        {/* Render grouped questions */}
+        {groupedQuestions.groups.map(({ groupId, header, questions: groupQs }) => (
+          <div key={groupId} className="question-group">
+            {/* Group header with instruction and image */}
+            {header && (
+              <div className="question-group-header">
+                {header.image_url && (
+                  <div className="question-image-container group-image">
+                    <img 
+                      src={header.image_url} 
+                      alt="Question diagram or illustration"
+                      className="question-image"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        console.warn('Failed to load question image:', header.image_url);
+                      }}
+                    />
+                  </div>
+                )}
+                {header.prompt && (
+                  <div className="question-prompt group-instruction">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeRaw]}
+                      skipHtml={false}
+                      components={{
+                        code: ({node, inline, className, children, ...props}) => {
+                          const match = /language-(\w+)/.exec(className || '');
+                          return !inline && match ? (
+                            <pre className="code-block" {...props}>
+                              <code className={className}>{children}</code>
+                            </pre>
+                          ) : (
+                            <code className="inline-code" {...props}>{children}</code>
+                          );
+                        },
+                        p: ({node, children, ...props}) => (
+                          <p className="markdown-paragraph" {...props}>{children}</p>
+                        ),
+                      }}
+                    >
+                      {header.prompt.replace(/\r\n/g, '\n')}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Group questions */}
+            {groupQs.map((question) => (
+              <article key={question.id} className="question-card" data-question-id={question.id}>
+                <header>
+                  {question.displaySequence && <span className="q-number">Q{question.displaySequence}</span>}
+                  <div className="question-prompt">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeRaw]}
+                      skipHtml={false}
+                      components={{
+                        code: ({node, inline, className, children, ...props}) => {
+                          const match = /language-(\w+)/.exec(className || '');
+                          return !inline && match ? (
+                            <pre className="code-block" {...props}>
+                              <code className={className}>{children}</code>
+                            </pre>
+                          ) : (
+                            <code className="inline-code" {...props}>{children}</code>
+                          );
+                        },
+                        p: ({node, children, ...props}) => (
+                          <p className="markdown-paragraph" {...props}>{children}</p>
+                        ),
+                      }}
+                    >
+                      {question.prompt.replace(/\r\n/g, '\n')}
+                    </ReactMarkdown>
+                  </div>
+                </header>
+                {!question.is_group_header && (
+                  <div className="options">
+                    {['A', 'B', 'C', 'D'].map((optionKey) => {
+                      // Check allowsMultiple - backend returns boolean, but handle edge cases
+                      const isMultiSelect = Boolean(question.allowsMultiple) || Boolean(question.allows_multiple);
+                      const currentAnswer = answers[question.id];
+                      const isSelected = isMultiSelect
+                        ? Array.isArray(currentAnswer) && currentAnswer.includes(optionKey)
+                        : currentAnswer === optionKey;
+                      
+                      return (
+                        <label 
+                          key={optionKey} 
+                          className={`option ${isSelected ? 'option--selected' : ''}`}
+                        >
+                          <input
+                            type={isMultiSelect ? 'checkbox' : 'radio'}
+                            name={isMultiSelect ? `question-${question.id}-${optionKey}` : `question-${question.id}`}
+                            value={optionKey}
+                            checked={isSelected}
+                            onChange={() => onAnswer(question.id, optionKey, isMultiSelect)}
+                          />
+                          <span dangerouslySetInnerHTML={{ __html: question[`option${optionKey}`] || '' }}></span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        ))}
+
+        {/* Render ungrouped questions */}
+        {groupedQuestions.ungrouped.map((question) => (
+          <article key={question.id} className="question-card" data-question-id={question.id}>
             <header>
-              <span className="q-number">Q{question.sequence}</span>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw]}
-                skipHtml={false}
-              >
-                {question.prompt.replace(/\r\n/g, '\n')}
-              </ReactMarkdown>
+              {question.displaySequence && <span className="q-number">Q{question.displaySequence}</span>}
+              <div className="question-prompt">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeRaw]}
+                  skipHtml={false}
+                  components={{
+                    code: ({node, inline, className, children, ...props}) => {
+                      const match = /language-(\w+)/.exec(className || '');
+                      return !inline && match ? (
+                        <pre className="code-block" {...props}>
+                          <code className={className}>{children}</code>
+                        </pre>
+                      ) : (
+                        <code className="inline-code" {...props}>{children}</code>
+                      );
+                    },
+                    p: ({node, children, ...props}) => (
+                      <p className="markdown-paragraph" {...props}>{children}</p>
+                    ),
+                  }}
+                >
+                  {question.prompt.replace(/\r\n/g, '\n')}
+                </ReactMarkdown>
+              </div>
+              {question.image_url && (
+                <div className="question-image-container">
+                  <img 
+                    src={question.image_url} 
+                    alt="Question diagram or illustration"
+                    className="question-image"
+                    onError={(e) => {
+                      e.target.style.display = 'none';
+                      console.warn('Failed to load question image:', question.image_url);
+                    }}
+                  />
+                </div>
+              )}
             </header>
             <div className="options">
-              {['A', 'B', 'C', 'D'].map((optionKey) => (
-                <label key={optionKey} className={`option ${answers[question.id] === optionKey ? 'option--selected' : ''}`}>
+              {['A', 'B', 'C', 'D'].map((optionKey) => {
+                // Check allowsMultiple - backend returns boolean, but handle edge cases
+                const isMultiSelect = Boolean(question.allowsMultiple) || Boolean(question.allows_multiple);
+                const currentAnswer = answers[question.id];
+                const isSelected = isMultiSelect
+                  ? Array.isArray(currentAnswer) && currentAnswer.includes(optionKey)
+                  : currentAnswer === optionKey;
+                
+                return (
+                  <label 
+                    key={optionKey} 
+                    className={`option ${isSelected ? 'option--selected' : ''}`}
+                  >
                   <input
-                    type="radio"
-                    name={`question-${question.id}`}
+                      type={isMultiSelect ? 'checkbox' : 'radio'}
+                      name={isMultiSelect ? `question-${question.id}-${optionKey}` : `question-${question.id}`}
                     value={optionKey}
-                    checked={answers[question.id] === optionKey}
-                    onChange={() => onAnswer(question.id, optionKey)}
+                      checked={isSelected}
+                      onChange={() => onAnswer(question.id, optionKey, isMultiSelect)}
                   />
-                  <span>{question[`option${optionKey}`]}</span>
+                  <span dangerouslySetInnerHTML={{ __html: question[`option${optionKey}`] || '' }}></span>
                 </label>
-              ))}
+                );
+              })}
             </div>
           </article>
         ))}
       </div>
-      <button className="primary submit-btn" onClick={onSubmit} disabled={loading}>
+        <div style={{ padding: '1rem 1.5rem', borderTop: '2px solid #dfe8f5', background: '#f5faff' }}>
+          <button className="primary submit-btn" onClick={onSubmit} disabled={loading} style={{ width: '100%' }}>
         {loading ? 'Submitting...' : 'Submit exam'}
       </button>
+        </div>
+      </div>
     </section>
   );
 }

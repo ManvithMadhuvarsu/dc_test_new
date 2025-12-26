@@ -81,7 +81,7 @@ export async function createSecureSession(payload) {
       }
 
       const [questions] = await connection.query(
-        `SELECT id, prompt, option_a, option_b, option_c, option_d
+        `SELECT id, prompt, option_a, option_b, option_c, option_d, question_group_id, is_group_header, group_order
          FROM questions
          WHERE is_active = TRUE`,
       );
@@ -90,10 +90,60 @@ export async function createSecureSession(payload) {
       throw new Error('Question Bank Empty. No questions are available in the system. Please contact support.');
     }
 
-    const randomizedQuestions = shuffle(questions).map((question, index) => ({
-      ...question,
-      sequence: index + 1,
-    }));
+    // Separate questions into groups and standalone questions
+    const questionGroups = new Map();
+    const standaloneQuestions = [];
+
+    questions.forEach((question) => {
+      if (question.question_group_id && question.question_group_id !== null) {
+        if (!questionGroups.has(question.question_group_id)) {
+          questionGroups.set(question.question_group_id, []);
+        }
+        questionGroups.get(question.question_group_id).push(question);
+      } else {
+        standaloneQuestions.push(question);
+      }
+    });
+
+    // Sort questions within each group by group_order (if set), otherwise by ID to maintain order
+    questionGroups.forEach((groupQuestions) => {
+      groupQuestions.sort((a, b) => {
+        if (a.group_order !== null && b.group_order !== null) {
+          return a.group_order - b.group_order;
+        }
+        if (a.group_order !== null) return -1;
+        if (b.group_order !== null) return 1;
+        return a.id - b.id;
+      });
+    });
+
+    // Shuffle standalone questions (zigzag order for individual questions)
+    const shuffledStandalone = shuffle(standaloneQuestions);
+
+    // Shuffle groups as units (but keep questions within groups in order)
+    const groupArrays = Array.from(questionGroups.values());
+    const shuffledGroups = shuffle(groupArrays);
+
+    // Combine: interleave groups and standalone questions randomly
+    const allItems = [...shuffledGroups, ...shuffledStandalone.map(q => [q])];
+    const finalShuffled = shuffle(allItems);
+
+    // Flatten all questions (including headers) in their final order
+    const allQuestions = finalShuffled.flat();
+    
+    // Assign sequential sequence numbers to actual questions (excluding headers)
+    // Headers don't get sequence numbers - they're just instructions
+    // This ensures Q1, Q2, Q3... are always sequential regardless of zigzag/group order
+    let sequenceCounter = 1;
+    const randomizedQuestions = allQuestions.map((question) => {
+      if (question.is_group_header) {
+        // Header questions don't get sequence numbers (they're instructions)
+        return { ...question, sequence: null };
+      } else {
+        // Actual questions get sequential numbers (Q1, Q2, Q3...) in the order they appear
+        return { ...question, sequence: sequenceCounter++ };
+      }
+    });
 
     const sessionId = uuid();
     const expiresAt = new Date(Date.now() + (config.examDurationMinutes * 60 * 1000));
@@ -120,6 +170,8 @@ export async function createSecureSession(payload) {
 
     await logAuditEvent(sessionId, student.student_identifier, 'CONNECTED');
 
+    // Insert questions in their shuffled order (preserves zigzag for individuals, order for groups)
+    // Sequence numbers are assigned sequentially but order is preserved by insertion order
     const placeholders = randomizedQuestions
       .map((_, index) => {
         const base = index * 3;
@@ -129,7 +181,7 @@ export async function createSecureSession(payload) {
     const values = randomizedQuestions.flatMap((question) => [
       sessionId,
       question.id,
-      question.sequence,
+      question.sequence, // Sequential number (Q1, Q2, Q3...) but order preserved by insertion
     ]);
 
     await connection.query(
@@ -138,9 +190,12 @@ export async function createSecureSession(payload) {
       values,
     );
 
+      // Count only actual questions (exclude headers)
+      const actualQuestionCount = randomizedQuestions.filter(q => !q.is_group_header).length;
+
       return {
         sessionId,
-        questionCount: randomizedQuestions.length,
+        questionCount: actualQuestionCount,
         expiresAt: expiresAt.toISOString(),
         durationMinutes: config.examDurationMinutes,
         studentName: name?.trim() || student.full_name,
@@ -190,6 +245,8 @@ export async function getSessionQuestions(sessionId) {
 
   await markTestStarted(sessionId);
 
+  // Fetch questions in insertion order (preserves zigzag for individuals, order for groups)
+  // Sequence numbers are sequential (Q1, Q2, Q3...) but order is preserved from insertion
   const [questions] = await pool.query(
     `SELECT
         q.id,
@@ -198,11 +255,16 @@ export async function getSessionQuestions(sessionId) {
         q.option_b AS "optionB",
         q.option_c AS "optionC",
         q.option_d AS "optionD",
+        q.image_url,
+        q.question_group_id,
+        q.is_group_header,
+        q.group_order,
+        COALESCE(q.allows_multiple, FALSE) AS "allowsMultiple",
         sq.sequence
      FROM session_questions sq
      INNER JOIN questions q ON q.id = sq.question_id
      WHERE sq.session_id = $1
-     ORDER BY sq.sequence ASC`,
+     ORDER BY sq.id ASC`,
     [sessionId],
   );
 
@@ -228,35 +290,36 @@ export async function submitExam(sessionId, answers) {
       throw badRequest('Session Already Closed. This exam session has already been closed. Please contact support.');
     }
 
-    if (session.expires_at && new Date(session.expires_at) <= new Date()) {
-      await connection.query(
-        `INSERT INTO violations
-          (session_id, reason, recorded_at)
-         VALUES ($1, $2, NOW())`,
-        [sessionId, 'Session expired'],
-      );
-      await connection.query(
-        `UPDATE sessions
-           SET status = $1, violation_reason = $2, ended_at = NOW()
-         WHERE session_id = $3`,
-        [SESSION_STATUS.TERMINATED, 'Session expired', sessionId],
-      );
-      throw badRequest('Session Time Elapsed. Your exam time has expired. The session has been closed.');
-    }
-
     const [sessionQuestions] = await connection.query(
-      'SELECT question_id FROM session_questions WHERE session_id = $1',
+      `SELECT sq.question_id 
+       FROM session_questions sq
+       INNER JOIN questions q ON q.id = sq.question_id
+       WHERE sq.session_id = $1 AND q.is_group_header = FALSE`,
       [sessionId],
     );
 
     const validQuestionIds = new Set(sessionQuestions.map((row) => row.question_id));
 
+    // Handle both single-select (string) and multi-select (array) answers
     const sanitizedAnswers = answers
       .filter((answer) => validQuestionIds.has(answer.questionId))
-      .map((answer) => ({
-        questionId: Number(answer.questionId),
-        selectedOption: answer.selectedOption?.toUpperCase() || null,
-      }));
+      .map((answer) => {
+        const questionId = Number(answer.questionId);
+        // Handle multi-select: selectedOption can be array or comma-separated string
+        let selectedOption = answer.selectedOption;
+        if (Array.isArray(selectedOption)) {
+          // Convert array to sorted comma-separated string (e.g., ['C', 'A', 'D'] -> 'A,C,D')
+          selectedOption = selectedOption.map(opt => opt.toUpperCase()).sort().join(',');
+        } else if (typeof selectedOption === 'string') {
+          selectedOption = selectedOption.toUpperCase();
+        } else {
+          selectedOption = null;
+        }
+        return {
+          questionId,
+          selectedOption,
+        };
+      });
 
     if (!sanitizedAnswers.length) {
       throw badRequest('No Valid Answers. No valid answers were submitted. Please provide answers to the questions.');
@@ -275,26 +338,80 @@ export async function submitExam(sessionId, answers) {
     const ids = uniqueAnswers.map((answer) => answer.questionId);
 
     const [questionRows] = await connection.query(
-      `SELECT id, correct_option AS "correctOption"
+      `SELECT id, correct_option AS "correctOption", COALESCE(allows_multiple, FALSE) AS "allowsMultiple"
        FROM questions
-       WHERE id = ANY($1::int[])`,
+       WHERE id = ANY($1::int[]) AND is_group_header = FALSE`,
       [ids],
     );
 
-    const correctMap = new Map(questionRows.map((row) => [row.id, row.correctOption]));
+    const questionMap = new Map(questionRows.map((row) => [
+      row.id,
+      {
+        correctOption: row.correctOption,
+        allowsMultiple: row.allowsMultiple,
+      },
+    ]));
 
-    let score = 0;
+    let totalScore = 0;
     const responseTuples = uniqueAnswers.map((answer) => {
-      const correctOption = correctMap.get(answer.questionId);
-      const isCorrect = correctOption && correctOption === answer.selectedOption;
-      if (isCorrect) {
-        score += 1;
+      const question = questionMap.get(answer.questionId);
+      if (!question) {
+        return [
+          sessionId,
+          answer.questionId,
+          answer.selectedOption,
+          false,
+          null,
+        ];
       }
+
+      const { correctOption, allowsMultiple } = question;
+      let isCorrect = false;
+      let partialScore = null;
+
+      if (allowsMultiple && correctOption && correctOption.includes(',')) {
+        // Multi-select question: calculate partial marks
+        const correctOptions = correctOption.split(',').map(opt => opt.trim()).sort();
+        const selectedOptions = answer.selectedOption
+          ? answer.selectedOption.split(',').map(opt => opt.trim()).sort()
+          : [];
+
+        // Calculate partial score: marks per correct option
+        const marksPerOption = 1.0 / correctOptions.length;
+        let earnedMarks = 0;
+
+        // Count correct selections
+        correctOptions.forEach(opt => {
+          if (selectedOptions.includes(opt)) {
+            earnedMarks += marksPerOption;
+          }
+        });
+
+        // Deduct marks for incorrect selections (wrong options selected)
+        selectedOptions.forEach(opt => {
+          if (!correctOptions.includes(opt)) {
+            earnedMarks -= marksPerOption; // Penalty for wrong selection
+          }
+        });
+
+        // Ensure score is between 0 and 1
+        partialScore = Math.max(0, Math.min(1, earnedMarks));
+        totalScore += partialScore;
+        isCorrect = partialScore === 1.0; // Fully correct only if all correct and no wrong
+      } else {
+        // Single-select question: full mark or zero
+        isCorrect = correctOption && correctOption === answer.selectedOption;
+        if (isCorrect) {
+          totalScore += 1;
+        }
+      }
+
       return [
         sessionId,
         answer.questionId,
         answer.selectedOption,
         Boolean(isCorrect),
+        partialScore,
       ];
     });
 
@@ -305,15 +422,15 @@ export async function submitExam(sessionId, answers) {
 
     const responsePlaceholders = responseTuples
       .map((_, index) => {
-        const base = index * 4;
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
+        const base = index * 5;
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
       })
       .join(', ');
     const responseValues = responseTuples.flat();
 
     await connection.query(
       `INSERT INTO responses
-        (session_id, question_id, selected_option, is_correct)
+        (session_id, question_id, selected_option, is_correct, partial_score)
        VALUES ${responsePlaceholders}`,
       responseValues,
     );
@@ -327,15 +444,15 @@ export async function submitExam(sessionId, answers) {
       `UPDATE sessions
          SET status = $1, score = $2, ended_at = NOW()
        WHERE session_id = $3`,
-      [SESSION_STATUS.COMPLETED, score, sessionId],
+      [SESSION_STATUS.COMPLETED, Math.round(totalScore * 100) / 100, sessionId], // Round to 2 decimal places
     );
 
     if (sessionInfo) {
-      await logAuditEvent(sessionId, sessionInfo.student_identifier, 'SUBMITTED', score);
+      await logAuditEvent(sessionId, sessionInfo.student_identifier, 'SUBMITTED', Math.round(totalScore * 100) / 100);
     }
 
     return {
-      score,
+      score: Math.round(totalScore * 100) / 100, // Round to 2 decimal places
       totalQuestions: validQuestionIds.size,
     };
   });

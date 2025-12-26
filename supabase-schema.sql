@@ -1,100 +1,135 @@
--- Supabase (Postgres) schema + seed data
--- Run this inside the Supabase SQL editor before deploying the backend.
-
-create extension if not exists "pgcrypto";
-create extension if not exists "uuid-ossp";
-
-create table if not exists questions (
-  id serial primary key,
-  prompt text not null,
-  option_a varchar(255) not null,
-  option_b varchar(255) not null,
-  option_c varchar(255) not null,
-  option_d varchar(255) not null,
-  correct_option text not null check (correct_option in ('A','B','C','D')),
-  is_active boolean default true,
-  created_at timestamptz default now()
+-- ===============================
+-- QUESTIONS
+-- ===============================
+CREATE TABLE IF NOT EXISTS questions (
+  id SERIAL PRIMARY KEY,
+  prompt TEXT NOT NULL,
+  option_a VARCHAR(255),  -- NULL allowed for header questions (is_group_header = TRUE)
+  option_b VARCHAR(255),  -- NULL allowed for header questions
+  option_c VARCHAR(255),  -- NULL allowed for header questions
+  option_d VARCHAR(255),  -- NULL allowed for header questions
+  correct_option VARCHAR(20) CHECK (correct_option IS NULL OR correct_option ~ '^[A-D](,[A-D])*$'),  -- Single letter (A-D) or comma-separated (A,C,D) for multi-select. NULL for header questions
+  allows_multiple BOOLEAN DEFAULT FALSE,  -- If TRUE, question allows multiple selections (checkboxes). If FALSE, single selection (radio buttons)
+  image_url TEXT,  -- Optional: URL to question image (diagrams, charts, screenshots, etc.)
+  question_group_id INT,  -- Optional: Groups questions together (e.g., questions sharing same image)
+  is_group_header BOOLEAN DEFAULT FALSE,  -- If TRUE, this question shows instruction + image for the group
+  group_order INT,  -- Optional: Order within the group (1, 2, 3, etc.) - maintains question order within group
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  -- Constraint: Header questions don't need options, regular questions do
+  CONSTRAINT check_header_options CHECK (
+    (is_group_header = TRUE AND option_a IS NULL) OR
+    (is_group_header = FALSE AND option_a IS NOT NULL AND option_b IS NOT NULL AND option_c IS NOT NULL AND option_d IS NOT NULL AND correct_option IS NOT NULL)
+  )
 );
 
-create table if not exists students (
-  student_identifier varchar(120) primary key,
-  full_name varchar(120) not null,
-  degree varchar(120),
-  course varchar(120),
-  has_attempted boolean default false,
-  is_active boolean default true,
-  created_at timestamptz default now()
+-- ===============================
+-- STUDENTS
+-- ===============================
+CREATE TABLE IF NOT EXISTS students (
+  student_identifier VARCHAR(120) PRIMARY KEY,
+  full_name VARCHAR(120) NOT NULL,
+  degree VARCHAR(120),
+  course VARCHAR(120),
+  has_attempted BOOLEAN DEFAULT FALSE,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-create table if not exists sessions (
-  session_id uuid primary key default gen_random_uuid(),
-  student_name varchar(120) not null,
-  degree varchar(120),
-  course varchar(120) not null,
-  student_identifier varchar(120) not null references students(student_identifier),
-  status text not null check (status in ('ACTIVE','COMPLETED','TERMINATED')) default 'ACTIVE',
-  score integer,
-  started_at timestamptz default now(),
-  expires_at timestamptz not null,
-  ended_at timestamptz,
-  violation_reason varchar(255)
+-- ===============================
+-- SESSIONS
+-- ===============================
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id UUID PRIMARY KEY,
+  student_name VARCHAR(120) NOT NULL,
+  degree VARCHAR(120),
+  course VARCHAR(120) NOT NULL,
+  student_identifier VARCHAR(120) NOT NULL,
+  status VARCHAR(20) CHECK (status IN ('ACTIVE','COMPLETED','TERMINATED')) DEFAULT 'ACTIVE',
+  score NUMERIC(5,2),  -- Changed from INT to NUMERIC to support decimal scores (e.g., 8.17)
+  started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  ended_at TIMESTAMP,
+  violation_reason VARCHAR(255),
+  CONSTRAINT fk_sessions_student
+    FOREIGN KEY (student_identifier)
+    REFERENCES students(student_identifier)
 );
 
-create table if not exists session_questions (
-  id bigserial primary key,
-  session_id uuid not null references sessions(session_id) on delete cascade,
-  question_id integer not null references questions(id) on delete cascade,
-  sequence integer not null
+-- ===============================
+-- SESSION QUESTIONS
+-- ===============================
+CREATE TABLE IF NOT EXISTS session_questions (
+  id BIGSERIAL PRIMARY KEY,
+  session_id UUID NOT NULL,
+  question_id INT NOT NULL,
+  sequence INT,  -- NULL allowed for header questions (instructions/images only)
+  CONSTRAINT fk_sq_session
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+  CONSTRAINT fk_sq_question
+    FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
 );
 
-create table if not exists responses (
-  id bigserial primary key,
-  session_id uuid not null references sessions(session_id) on delete cascade,
-  question_id integer not null references questions(id) on delete cascade,
-  selected_option text check (selected_option in ('A','B','C','D')),
-  is_correct boolean default false,
-  answered_at timestamptz default now()
+-- ===============================
+-- RESPONSES
+-- ===============================
+CREATE TABLE IF NOT EXISTS responses (
+  id BIGSERIAL PRIMARY KEY,
+  session_id UUID NOT NULL,
+  question_id INT NOT NULL,
+  selected_option TEXT CHECK (selected_option IS NULL OR selected_option ~ '^[A-D](,[A-D])*$'),  -- Single letter or comma-separated for multi-select
+  is_correct BOOLEAN DEFAULT FALSE,
+  partial_score DECIMAL(5,2),  -- Partial marks for multi-select questions (0.0 to 1.0). NULL for single-select
+  answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_resp_session
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+  CONSTRAINT fk_resp_question
+    FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
 );
 
-create table if not exists violations (
-  id bigserial primary key,
-  session_id uuid not null references sessions(session_id) on delete cascade,
-  reason varchar(255) not null,
-  recorded_at timestamptz not null default now()
+-- ===============================
+-- VIOLATIONS
+-- ===============================
+CREATE TABLE IF NOT EXISTS violations (
+  id BIGSERIAL PRIMARY KEY,
+  session_id UUID NOT NULL,
+  reason VARCHAR(255) NOT NULL,
+  recorded_at TIMESTAMP NOT NULL,
+  CONSTRAINT fk_violations_session
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
-create table if not exists audit_logs (
-  id bigserial primary key,
-  session_id uuid not null,
-  student_identifier varchar(120) not null,
-  status text not null check (status in ('CONNECTED','STARTED_TEST','KICKED_OUT','SUBMITTED')),
-  score integer,
-  violation_reason varchar(255),
-  logged_at timestamptz not null default now(),
-  index_student_identifier varchar(120),
-  index_session uuid,
-  index_logged_at timestamptz
+-- ===============================
+-- AUDIT LOGS
+-- ===============================
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  session_id UUID NOT NULL,
+  student_identifier VARCHAR(120) NOT NULL,
+  status VARCHAR(30) CHECK (status IN ('CONNECTED','STARTED_TEST','KICKED_OUT','SUBMITTED')),
+  score NUMERIC(5,2),
+  violation_reason VARCHAR(255),
+  logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-create index if not exists idx_audit_logs_student on audit_logs(student_identifier);
-create index if not exists idx_audit_logs_session on audit_logs(session_id);
-create index if not exists idx_audit_logs_logged_at on audit_logs(logged_at);
+CREATE INDEX idx_audit_student ON audit_logs(student_identifier);
+CREATE INDEX idx_audit_session ON audit_logs(session_id);
+CREATE INDEX idx_audit_logged_at ON audit_logs(logged_at);
 
-insert into questions (prompt, option_a, option_b, option_c, option_d, correct_option)
-values
-  ('HTML stands for?', 'Hyper Trainer Marking Language', 'Hyper Text Markup Language', 'Hyper Text Marketing Language', 'Hyper Text Markup Leveler', 'B'),
-  ('Which CSS property controls the text size?', 'font-style', 'text-size', 'font-size', 'text-style', 'C'),
-  ('Inside which HTML element do we put JavaScript?', '<javascript>', '<script>', '<js>', '<scripting>', 'B'),
-  ('React applications are built using?', 'Templates', 'Components', 'Widgets', 'Handlers', 'B')
-on conflict (id) do nothing;
 
-insert into students (student_identifier, full_name, degree, course)
-values
-  ('AM.SC.P2AML24023', 'Manvith Rao', 'B.Tech', 'Computer Science'),
-  ('AM.SC.P2AML24024', 'Saanvi N', 'B.Tech', 'Computer Science'),
-  ('AM.SC.P2AML24025', 'Arjun M', 'B.Tech', 'Computer Science'),
-  ('AM.SC.P2AML24026', 'Navya S', 'B.Tech', 'Information Technology')
-on conflict (student_identifier) do update set full_name = excluded.full_name,
-                                             degree = excluded.degree,
-                                             course = excluded.course;
+INSERT INTO questions (prompt, option_a, option_b, option_c, option_d, correct_option)
+VALUES
+ ('HTML stands for?', 'Hyper Trainer Marking Language', 'Hyper Text Markup Language', 'Hyper Text Marketing Language', 'Hyper Text Markup Leveler', 'B'),
+ ('Which CSS property controls the text size?', 'font-style', 'text-size', 'font-size', 'text-style', 'C'),
+ ('Inside which HTML element do we put JavaScript?', '<javascript>', '<script>', '<js>', '<scripting>', 'B'),
+ ('React applications are built using?', 'Templates', 'Components', 'Widgets', 'Handlers', 'B')
+ON CONFLICT DO NOTHING;
 
+
+INSERT INTO students (student_identifier, full_name, degree, course)
+VALUES
+ ('DC@001', 'Manvith', 'B.Tech', 'Computer Science'),
+ ('DC@002', 'Aravindh', 'B.Tech', 'VLSI'),
+ ('DC@003', 'Amitha', 'B.Tech', 'Computer Science'),
+ ('DC@004', 'Giri', 'B.Tech', 'Information Technology')
+ON CONFLICT (student_identifier) DO NOTHING;
